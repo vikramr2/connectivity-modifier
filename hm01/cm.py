@@ -15,12 +15,11 @@ import networkit as nk
 from structlog import get_logger
 import jsonpickle
 from hm01.clusterers.abstract_clusterer import AbstractClusterer
-from .clusterers.ikc_wrapper import IkcClusterer
-from .context import context
-from .mincut_requirement import MincutRequirement
-from .pruner import prune_graph
+from hm01.clusterers.ikc_wrapper import IkcClusterer
+from hm01.context import context
+from hm01.mincut_requirement import MincutRequirement
+from hm01.pruner import prune_graph
 import sys
-
 
 class ClustererSpec(str, Enum):
     leiden = "leiden"
