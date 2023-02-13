@@ -24,6 +24,7 @@ import sqlite3
 import pickle as pkl
 
 class ClustererSpec(str, Enum):
+    """ Container for Clusterer Specification """  
     leiden = "leiden"
     ikc = "ikc"
     leiden_mod = "leiden_mod"
@@ -73,6 +74,8 @@ def update_cid_membership(
 
 
 class ClusterTreeNode(ts.Node):
+    ''' 
+    '''
     extant: bool
     graph_index: str
     num_nodes: int
@@ -111,19 +114,21 @@ def algorithm_g(
     filterer: ClusterIgnoreFilter = ClusterIgnoreFilter.default(),
 ) -> Tuple[List[IntangibleSubgraph], Dict[int, str], ts.Tree]:
     log = get_logger()
+
+    # Load checkpoints. If checkpoint doesn't exist, initialize
     if not checkpoint:
-        tree = ts.Tree()
+        tree = ts.Tree()                                # tree: 
         tree.root = ClusterTreeNode()
         annotate_tree_node(tree.root, global_graph)
-        node_mapping: Dict[str, ClusterTreeNode] = {}
+        node_mapping: Dict[str, ClusterTreeNode] = {}   # node_mapping: maps cluster id to cluster tree node       
         for g in graphs:
             n = ClusterTreeNode()
             annotate_tree_node(n, g)
             tree.root.add_child(n)
             node_mapping[g.index] = n
-        stack: List[IntangibleSubgraph] = list(graphs)
-        ans: List[IntangibleSubgraph] = []
-        node2cids: Dict[int, str] = {}
+        stack: List[IntangibleSubgraph] = list(graphs)  # stack: (TODO: Change to queue), the stack for cluster processing
+        ans: List[IntangibleSubgraph] = []              # ans: Reclustered output
+        node2cids: Dict[int, str] = {}                  # node2cids: Mapping between nodes and cluster ID
     else:
         tree = checkpoint.tree
         node_mapping = checkpoint.node_mapping
@@ -131,6 +136,8 @@ def algorithm_g(
         ans = checkpoint.ans
         node2cids = checkpoint.node2cids
         log.info("loaded checkpoint")
+    
+    # Main algorithm loop: Recursively cut clusters in stack until they have mincut above threshold
     log.info("starting algorithm-g", queue_size=len(stack))
     last_checkpoint_time = time.time()
     while stack:
@@ -142,14 +149,24 @@ def algorithm_g(
             graph_n=intangible_subgraph.n(),
             graph_index=intangible_subgraph.index,
         )
+
+        # Mark nodes in popped cluster with their respective cluster ID
         update_cid_membership(intangible_subgraph, node2cids)
+
+        # If the current cluster is a singleton or empty, move on
         if intangible_subgraph.n() <= 1:
             continue
+
+        # Check if clusters are in the ignore filter criteria
         if filterer(intangible_subgraph, global_graph):
             log.debug("filtered graph", graph_index=intangible_subgraph.index)
             ans.append(intangible_subgraph)
             continue
+
+        # Realize the set of nodes contained by the graph (i.e. construct its adjacency list)
         subgraph = intangible_subgraph.realize(global_graph)
+
+        # Get the current cluster tree node
         tree_node = node_mapping[subgraph.index]
         log = log.bind(
             g_id=subgraph.index,
@@ -253,7 +270,7 @@ def main(
     ignore_trees: bool = typer.Option(False, "--ignore-trees", "-x"),
     ignore_smaller_than: int = typer.Option(0, "--ignore-smaller-than", "-s"),
 ):
-    """Connectivity-Modifier (CM). Take a network and cluster it ensuring cut validity
+    """ Connectivity-Modifier (CM). Take a network and cluster it ensuring cut validity
     """
     sys.setrecursionlimit(1231231234)
     if clusterer_spec == ClustererSpec.leiden:
