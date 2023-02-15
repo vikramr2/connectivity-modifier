@@ -31,6 +31,7 @@ class ClustererSpec(str, Enum):
 
 
 def summarize_graphs(graphs: List[IntangibleSubgraph]) -> str:
+    """ Summarize graphs for logging purposes """
     if not graphs:
         return "[](empty)"
     if len(graphs) > 3:
@@ -42,6 +43,7 @@ def summarize_graphs(graphs: List[IntangibleSubgraph]) -> str:
 def annotate_tree_node(
     node: ClusterTreeNode, graph: Union[Graph, IntangibleSubgraph, RealizedSubgraph]
 ):
+    """ Labels a ClusterTreeNode with its respective cluster """
     node.label = graph.index
     node.graph_index = graph.index
     node.num_nodes = graph.n()
@@ -50,6 +52,7 @@ def annotate_tree_node(
 
 @dataclass
 class ClusterIgnoreFilter:
+    """ Callable object for ignoring clusters according to the following parameters """
     ignore_trees: bool
     ignore_smaller_than: int
 
@@ -69,13 +72,17 @@ def update_cid_membership(
     subgraph: Union[Graph, IntangibleSubgraph, RealizedSubgraph],
     node2cids: Dict[int, str],
 ):
+    """ Set nodes within current cluster to its respective cluster id """
     for n in subgraph.nodes():
         node2cids[n] = subgraph.index
 
 
 class ClusterTreeNode(ts.Node):
-    ''' 
-    '''
+    """ Object to represent a cluster in the mincut/recluster recursion tree 
+    
+    The root of the tree is the entire graph. When a a cluster is cut and reclustered into new clusters,
+    the original cluster is a parent node to the children clusters.
+    """
     extant: bool
     graph_index: str
     num_nodes: int
@@ -117,7 +124,7 @@ def algorithm_g(
 
     # Load checkpoints. If checkpoint doesn't exist, initialize
     if not checkpoint:
-        tree = ts.Tree()                                # tree: 
+        tree = ts.Tree()                                # tree: Recursion tree that keeps track of clusters created by serial mincut/reclusters
         tree.root = ClusterTreeNode()
         annotate_tree_node(tree.root, global_graph)
         node_mapping: Dict[str, ClusterTreeNode] = {}   # node_mapping: maps cluster id to cluster tree node       
@@ -174,9 +181,14 @@ def algorithm_g(
             g_m=subgraph.m(),
             g_mcd=subgraph.mcd(),
         )
+
+        # Get minimum node degree in current cluster
         original_mcd = subgraph.mcd()
+
+        # Pruning: Remove singletons with node degree under threshold until there exists none
         num_pruned = prune_graph(subgraph, requirement, clusterer)
         if num_pruned > 0:
+            # Set the cluster cut size to the degree of the removed node
             tree_node.cut_size = original_mcd
             log = log.bind(
                 g_id=subgraph.index,
@@ -185,14 +197,21 @@ def algorithm_g(
                 g_mcd=subgraph.mcd(),
             )
             log.info("pruned graph", num_pruned=num_pruned)
+
+            # Create a TreeNodeCluster for the pruned cluster and set it as the current node's child
             new_child = ClusterTreeNode()
             subgraph.index = f"{subgraph.index}δ"
             annotate_tree_node(new_child, subgraph)
             tree_node.add_child(new_child)
             node_mapping[subgraph.index] = new_child
+
+            # Iterate to the new node
             tree_node = new_child
             update_cid_membership(subgraph, node2cids)
+
+        # Compute the mincut of the cluster
         mincut_res = subgraph.find_mincut()
+
         # is a cluster "cut-valid" -- having good connectivity?
         valid_threshold = requirement.validity_threshold(clusterer, subgraph)
         log.debug("calculated validity threshold", validity_threshold=valid_threshold)
@@ -202,9 +221,14 @@ def algorithm_g(
             b_side_size=len(mincut_res.heavy_partition),
             cut_size=mincut_res.cut_size,
         )
+
+        # Set the current cluster's cut size
         tree_node.cut_size = mincut_res.cut_size
         tree_node.validity_threshold = valid_threshold
+
+        # If the cut size is below validity, split!
         if mincut_res.cut_size <= valid_threshold and mincut_res.cut_size > 0:
+            # Split partitions and set them as children nodes
             p1, p2 = subgraph.cut_by_mincut(mincut_res)
             node_a = ClusterTreeNode()
             node_b = ClusterTreeNode()
@@ -214,14 +238,20 @@ def algorithm_g(
             tree_node.add_child(node_b)
             node_mapping[p1.index] = node_a
             node_mapping[p2.index] = node_b
+
+            # Cluster both partitions
             subp1 = list(clusterer.cluster_without_singletons(p1))
             subp2 = list(clusterer.cluster_without_singletons(p2))
+
+            # Set clusters as children of the partitions
             for p, np in [(subp1, node_a), (subp2, node_b)]:
                 for sg in p:
                     n = ClusterTreeNode()
                     annotate_tree_node(n, sg)
                     node_mapping[sg.index] = n
                     np.add_child(n)
+
+            # Add the new clusters to the stack
             stack.extend(subp1)
             stack.extend(subp2)
             log.info(
@@ -232,10 +262,14 @@ def algorithm_g(
                 summary_b_side=summarize_graphs(subp2),
             )
         else:
+            # Compute the modularity of the cluster
             candidate = subgraph.to_intangible(global_graph)
             mod = global_graph.modularity_of(candidate)
+
             # TODO: stop ad-hoc checks of the clusterer being IkcClusterer and
             # and thus need to use the modularity of the candidate
+
+            # Check if the modularity value is valid so that the answer can include the modified cluster
             if not isinstance(clusterer, IkcClusterer) or mod > 0:
                 ans.append(candidate)
                 node_mapping[subgraph.index].extant = True
@@ -246,6 +280,8 @@ def algorithm_g(
                     "cut valid, but modularity non-positive, thrown away",
                     modularity=mod,
                 )
+
+        # Checkpoint periodically
         if time.time() - last_checkpoint_time > 3600 * 2:
             last_checkpoint_time = time.time()
             log.info("checkpointing")
@@ -272,7 +308,10 @@ def main(
 ):
     """ Connectivity-Modifier (CM). Take a network and cluster it ensuring cut validity
     """
+    # Setting a really high recursion limit to prevent stack overflow errors
     sys.setrecursionlimit(1231231234)
+
+    # Check -g and -k parameters for Leiden and IKC respectively
     if clusterer_spec == ClustererSpec.leiden:
         assert resolution != -1, "Leiden requires resolution"
         clusterer: Union[LeidenClusterer, IkcClusterer] = LeidenClusterer(resolution)
@@ -282,6 +321,7 @@ def main(
     else:
         assert k != -1, "IKC requires k"
         clusterer = IkcClusterer(k)
+
     log = get_logger()
     context.with_working_dir(input + "_working_dir" if not working_dir else working_dir)
     log.info(
@@ -290,11 +330,18 @@ def main(
         working_dir=context.working_dir,
         clusterer=clusterer,
     )
+
+    # Parse mincut threshold specification
     requirement = MincutRequirement.try_from_str(threshold)
     log.info(f"parsed connectivity requirement", requirement=requirement)
+
+    # (TODO) This can be removed in the cm_pipeline implementation
     filterer = ClusterIgnoreFilter(ignore_trees, ignore_smaller_than)
     log.info(f"parsed cluster filter", filterer=filterer)
+
     time1 = time.time()
+
+    # Load full graph into Graph object
     edgelist_reader = nk.graphio.EdgeListReader("\t", 0)
     nk_graph = edgelist_reader.read(input)
     log.info(
@@ -304,6 +351,8 @@ def main(
         elapsed=time.time() - time1,
     )
     root_graph = Graph(nk_graph, "")
+
+    # (TODO) This can be removed as well... this handles the existing clusterer option
     if not existing_clustering:
         log.info(
             f"running first round of clustering before algorithm-g", clusterer=clusterer
@@ -317,9 +366,13 @@ def main(
         num_clusters=len(clusters),
         summary=summarize_graphs(clusters),
     )
+
+    # Call the main CM algorithm
     new_clusters, labels, tree = algorithm_g(
         root_graph, clusters, clusterer, requirement, Checkpoint.load(), filterer
     )
+
+    # Retrieve output
     with open(output, "w+") as f:
         for n, cid in labels.items():
             f.write(f"{n} {cid}\n")

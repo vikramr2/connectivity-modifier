@@ -173,7 +173,11 @@ class Graph(AbstractGraph):
         return self._data.iterNodes()
 
     def modularity_of(self, g: IntangibleSubgraph) -> float:
-        """calculate the modularity of the subset `g` with respect to `self`"""
+        """calculate the modularity of the subset `g` with respect to `self`
+        
+        Modularity is higher when clusters are densely connected within clusters but sparsely 
+        connected between clusters
+        """
         ls = g.count_edges(self)
         big_l = self.m()
         ds = sum(self._data.degree(n) for n in g.subset)
